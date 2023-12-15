@@ -22,7 +22,7 @@ public class Server {
             try {
                 String URL = "jdbc:mysql://localhost:3306/androidserver?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC";
                 String USER = "root";
-                String PWD = "xu35p4jo6";
+                String PWD = "password";
                 mysql = DriverManager.getConnection(URL, USER, PWD);
                 System.out.println("Successfully connect to MySQL.");
             } catch (SQLException e) {
@@ -237,7 +237,7 @@ public class Server {
                                     String msg2 = bufferedReader.readLine();
                                     String time = bufferedReader.readLine();
                                     System.out.println(name+" "+msg2+" "+time);
-                                    if (time.equals("1970-01-01 00:00:01.0") || time == null) {
+                                    if (time.equals("leave") || time == null) {
                                         System.out.println(time);
                                         break;
                                     }
