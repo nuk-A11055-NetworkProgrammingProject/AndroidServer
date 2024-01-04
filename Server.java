@@ -8,12 +8,14 @@ public class Server {
     private ServerSocket serverSocket;
     final private int port = 12346;
     private static Hashtable<Socket, OutputStream> clients;
+    private static Hashtable<String, Hashtable<Socket, OutputStream>> groups;
     private static Connection mysql;
 
     Server() {
         try {
             serverSocket = new ServerSocket(port);
             clients = new Hashtable<Socket, OutputStream>();
+            groups = new Hashtable<String, Hashtable<Socket, OutputStream>>();
             System.out.println("Server started.");
 
             // 連接資料庫
@@ -26,6 +28,23 @@ public class Server {
             } catch (SQLException e) {
                 e.printStackTrace();
                 System.out.println("Failed to connect MySQL.");
+            }
+
+            // 找出目前有哪些群組
+            try {
+                String query = "SHOW TABLES";
+                PreparedStatement preparedStatement = mysql.prepareStatement(query);
+                ResultSet resultSet = preparedStatement.executeQuery();
+                while (resultSet.next()) {
+                    String tableName = resultSet.getString(1);
+                    if(tableName.equals("user_account")){
+                        continue;
+                    }
+                    groups.put(tableName, new Hashtable<Socket, OutputStream>());
+                    System.out.println(tableName);
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
             }
 
             while (!serverSocket.isClosed()) {
@@ -57,7 +76,7 @@ public class Server {
                         String option = msg.substring(0, 10);
                         String data = msg.substring(10);
                         // System.out.println(option);
-                        
+
                         // 嘗試登入
                         if (option.equals("CHECKLOGIN")) {
                             try {
@@ -132,25 +151,28 @@ public class Server {
 
                     // 用戶端已登入
                     while (login) {
-                        
+
                         String msg = bufferedReader.readLine();
                         if (msg == null) {
                             break;
                         }
+                        System.out.println(msg);
                         // 12/7 新增create table
                         String option = msg.substring(0, 10);
                         String data = msg.substring(10);
+                        System.out.println(option + " : " + data);
                         if(option.equals("CREATEGRUP")){
                             try {
                                 String[] tokens = data.split(":");
                                 String username = tokens[0], grupname = tokens[1];
                                 System.out.println(username + " : create grup :" + grupname);
-                                String query = "CREATE TABLE "+grupname+" (Name VARCHAR(20), Time TIMESTAMP,Message VARCHAR(1000))";
+                                String query = "CREATE TABLE "+grupname+" (Name VARCHAR(20), Time TIMESTAMP,Message TEXT)";
                                 Statement statement = mysql.createStatement();
                                 statement.executeUpdate(query);
                                 // bufferedWriter.write("Successfully create grup");
                                 // bufferedWriter.newLine();
                                 // bufferedWriter.flush();
+                                groups.put(grupname, new Hashtable<Socket, OutputStream>());
                             } catch (Exception e) {
                                 e.printStackTrace();
                             }
@@ -177,10 +199,90 @@ public class Server {
                             } catch (Exception e) {
                                 e.printStackTrace();
                             }
+                        } else if (option.equals("ENTERGROUP")) {
+
+                            String groupName = data;
+                            groups.get(groupName).put(socket, socket.getOutputStream());
+                            // 傳送歷史訊息
+                            try {
+                                String query = "SELECT * FROM " + groupName;
+                                PreparedStatement preparedStatement = mysql.prepareStatement(query);
+                                ResultSet resultSet = preparedStatement.executeQuery();
+                                System.out.println("Sending chat history...");
+                                while (resultSet.next() && login) {
+                                    String username = resultSet.getString("Name");
+                                    String message = resultSet.getString("Message");
+                                    String time  = resultSet.getTimestamp("Time").toString();
+                                    bufferedWriter.write(username + "\n");
+                                    bufferedWriter.write(message + "\n");
+                                    bufferedWriter.write(time + "\n");
+                                    bufferedWriter.flush();
+                                    System.out.println(username + " " + message + " " + time);
+                                }
+                                // 送出歷史訊息傳送完畢的 signal
+                                bufferedWriter.write("end" + "\n");
+                                bufferedWriter.write("end" + "\n");
+                                bufferedWriter.write("end" + "\n");
+                                bufferedWriter.flush();
+                                System.out.println("Done");
+
+                            } catch (SQLException e) {
+                                e.printStackTrace();
+                            }
+
+                            // 開始接收訊息、廣播
+                            try {
+                                while (true) {
+                                    String name = bufferedReader.readLine();
+                                    String msg2 = bufferedReader.readLine();
+                                    String time = bufferedReader.readLine();
+                                    System.out.println(name+" "+msg2+" "+time);
+                                    if (time.equals("leave") || time == null) {
+                                        System.out.println(time);
+                                        break;
+                                    }
+                                    saveMsgToDB(name, msg2, time, groupName);
+                                    broadcastMsg(name, msg2, time, groupName);
+                                }
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            } finally {
+                                groups.get(groupName).remove(socket);
+                                System.out.println("leave " + groupName);
+                                // clients.remove(socket);
+                            }
+                        }else if(option.equals("FIXPRIVATE")){
+                            String[] NA_PA = data.split(":");
+                            String name = NA_PA[0], password = NA_PA[1];
+                            try{
+                                String query = "SELECT * FROM user_account";
+                                PreparedStatement preparedStatement = mysql.prepareStatement(query);
+                                ResultSet resultSet = preparedStatement.executeQuery();
+                                while (resultSet.next() && login) {
+                                    String username = resultSet.getString("Name");
+                                    String Password = resultSet.getString("Password");
+                                    if(username.equals(name)){
+                                        String temp_query = "UPDATE user_account SET Password = ?, Name = ? WHERE Name = ?";
+                                        preparedStatement = mysql.prepareStatement(temp_query);
+                                        preparedStatement.setString(1, password);
+                                        preparedStatement.setString(2, name);
+                                        preparedStatement.setString(3, username);
+                                        preparedStatement.executeUpdate();
+                                        System.out.println("update name ,password");
+                                        bufferedWriter.write("update name ,password");
+                                        break;
+                                    }else if(username.equals(name) && !Password.equals(password)){
+                                        System.out.println("error password");
+                                        bufferedWriter.write("error password");
+                                        break;
+                                    }
+                                }
+                                bufferedWriter.newLine();
+                                bufferedWriter.flush();
+                            }catch(Exception e){
+                                e.printStackTrace();
+                            }
                         }
-//                        saveMsgToDB(msg);
-                        System.out.println(msg);
-                        broadcastMsg(msg);
                     }
 
                 } catch (IOException e) {
@@ -198,31 +300,31 @@ public class Server {
         }).start();
     }
 
-    public static void broadcastMsg(String msg) throws IOException {
-        for (Enumeration e = clients.elements(); e.hasMoreElements(); ) {
+    public static void broadcastMsg(String name, String msg, String time, String groupName) throws IOException {
+
+        // 廣播訊息給與用戶同群組的其他用戶
+        for (Enumeration e = groups.get(groupName).elements(); e.hasMoreElements(); ) {
+
             BufferedWriter outstream = new BufferedWriter(
                     new OutputStreamWriter((OutputStream) e.nextElement()));
 
+            outstream.write(name + "\n");
             outstream.write(msg + "\n");
+            outstream.write(time + "\n");
             outstream.flush();
         }
     }
 
-    public static void saveMsgToDB(String msg) {
-        String[] tokens = msg.split(":");
-        String name = tokens[0], message = tokens[1];
+    public static void saveMsgToDB(String name, String msg, String time, String groupName) {
+        // 轉換時間為 Timestamp 型態
+        Timestamp timestamp = Timestamp.valueOf(time);;
 
-        // 取得目前時間
-        Date currentDate = new Date();
-        Timestamp timestamp = new Timestamp(currentDate.getTime());
-
-        String sql = "INSERT INTO chat_history(Name, Time, Message) VALUES (?, ?, ?)";
+        String sql = "INSERT INTO " + groupName + "(Name, Time, Message) VALUES (?, ?, ?)";
         try {
             PreparedStatement preparedStatement = mysql.prepareStatement(sql);
             preparedStatement.setString(1, name);
             preparedStatement.setTimestamp(2, timestamp);
-            preparedStatement.setString(3, message);
-
+            preparedStatement.setString(3, msg);
             preparedStatement.executeUpdate();
         } catch (SQLException e) {
             e.printStackTrace();
